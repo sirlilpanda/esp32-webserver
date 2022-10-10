@@ -26,18 +26,12 @@ WiFiServer server(80);
 // Variable to store the HTTP request
 String header;
 
-// states (could be remove with some tweaks)
-bool output26State = false;
-bool output27State = false;
-
-// gpio pins (could be remove with some tweaks)
-#define output26 26
-#define output27 27
+#define WAITING 2
 
 // struct for the timing pin
 typedef struct {
   const uint8_t pin_number;
-  bool pin_state;
+  uint8_t pin_state;
   uint64_t end_time; 
 }Timed_Pin_t;
 
@@ -46,18 +40,24 @@ const size_t pin_amount = 2;
 
 // timed pins array
 Timed_Pin_t pins[pin_amount] = {
-  (Timed_Pin_t) {.pin_number = 26, .pin_state = 0, .end_time = 0},
-  (Timed_Pin_t) {.pin_number = 27, .pin_state = 0, .end_time = 0}
+  (Timed_Pin_t) {.pin_number = 26, .pin_state = 1, .end_time = 0},
+  (Timed_Pin_t) {.pin_number = 27, .pin_state = 1, .end_time = 0}
 };
 
 // checks all the timed pin to see if any must be changed
 void checktimes(uint32_t currtime){
   for(size_t i = 0; i < pin_amount; i++){
-    if (pins[i].pin_state == 1){
+    if (pins[i].pin_state == WAITING){
+      Serial.println("========");
+      Serial.println(pins[i].pin_state);
+      Serial.println(pins[i].pin_number);
+      Serial.println(pins[i].end_time);
+      Serial.println(currtime);
+      Serial.println("========");
       if (pins[i].end_time <= currtime){
         pins[i].end_time = 0;
-        digitalWrite(pins[i].pin_number, 0);
-        pins[i].pin_state = 0;
+        digitalWrite(pins[i].pin_number, HIGH);
+        pins[i].pin_state = 1;
       }
     }
   }
@@ -99,19 +99,19 @@ void send_button_page(WiFiClient client){
   client.println("<style>");
 
   client.println("html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-  client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;");
+  client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px; border-radius: 9999px;");
   client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
   client.println(".button2 {background-color: #555555;}");
-
   client.println("</style></head>");
   // \style sheet
   
   // Web Page Heading
-  client.println("<body><h1>ESP32 Web Server</h1>");
+  client.println("<body><h1>USB Power controller hub</h1>");
+  client.println("<body><h1>USB states:</h1>");
 
   //adds the buttons to the web page  
-  send_button_states(client, output26State, output26);
-  send_button_states(client, output27State, output27);
+  send_button_states(client, pins[0].pin_state, pins[0].pin_number);
+  send_button_states(client, pins[1].pin_state, pins[1].pin_number);
 
   // closes of the final tags
   client.println("</body></html>");
@@ -120,14 +120,14 @@ void send_button_page(WiFiClient client){
   client.println();
 }
 //creates the html and css for the current button states
-void send_button_states(WiFiClient client, bool pinState, uint8_t pinNumber){
+void send_button_states(WiFiClient client, uint8_t pinState, uint8_t pinNumber){
 
-  if (pinState == 0) {
-    client.println("<p>GPIO "+String(pinNumber)+" - State on </p>");
+  if (pinState == 1) {
+    client.println("<p>USB "+String(pinNumber-25)+" State on </p>");
     client.println("<p><a href=\"/"+String(pinNumber)+"/on\"><button class=\"button\">ON</button></a></p>");
     client.println("<p><a href=\"/"+String(pinNumber)+"/hour_on\"><button class=\"button\">ON for hour</button></a></p>");
   } else {
-    client.println("<p>GPIO "+String(pinNumber)+" - State off </p>");
+    client.println("<p>USB "+String(pinNumber-25)+" State off </p>");
     client.println("<p><a href=\"/"+String(pinNumber)+"/off\"><button class=\"button button2\">OFF</button></a></p>");
   }
 }
@@ -137,42 +137,40 @@ void check_header(){
   // turns the GPIOs on and off
   if (header.indexOf("GET /26/on") >= 0) {
 
+    pins[0].pin_state = 0;
     Serial.println("GPIO 26 on");
-    output26State = 1;
-    digitalWrite(output26, HIGH);
+    digitalWrite(pins[0].pin_number, LOW);
   
   } else if (header.indexOf("GET /26/off") >= 0) {
   
+    pins[0].pin_state = 1;
     Serial.println("GPIO 26 off");
-    output26State = 0;
-    digitalWrite(output26, LOW);
+    digitalWrite(pins[0].pin_number, HIGH);
   
   } else if (header.indexOf("GET /27/on") >= 0) {
  
+    pins[1].pin_state = 0;
     Serial.println("GPIO 27 on");
-    output27State = 1;
-    digitalWrite(output27, HIGH);
+    digitalWrite(pins[1].pin_number, LOW);
  
   } else if (header.indexOf("GET /27/off") >= 0) {
  
+    pins[1].pin_state = 1;
     Serial.println("GPIO 27 off");
-    output27State = 0;
-    digitalWrite(output27, LOW);
+    digitalWrite(pins[1].pin_number, HIGH);
  
   } else if (header.indexOf("GET /26/hour_on") >= 0){
   
     Serial.println("GPIO 26 on for an hour");
-    output26State = 1;
-    digitalWrite(output26, HIGH);
-    pins[0].pin_state = 1;
+    digitalWrite(pins[0].pin_number, LOW);
+    pins[0].pin_state = WAITING;
     pins[0].end_time = 10000+lastIsrAt;
   
   } else if (header.indexOf("GET /27/hour_on") >= 0){
       
     Serial.println("GPIO 27 on for an hour");
-    output27State = 1;
-    digitalWrite(output27, HIGH);
-    pins[1].pin_state = 1;
+    digitalWrite(pins[1].pin_number, LOW);
+    pins[1].pin_state = WAITING;
     pins[1].end_time = 10000+lastIsrAt;
   
   }
@@ -186,7 +184,6 @@ void update_and_check_timers(void* _){
   for(;;){
     // If Timer has fired
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE){
-      Serial.println("checked");
       // Read the interrupt count and time
       portENTER_CRITICAL(&timerMux);
       portEXIT_CRITICAL(&timerMux);    
@@ -203,10 +200,10 @@ void setup() {
   Serial.begin(115200);
 
   //============ pin set up ==============
-  pinMode(output26, OUTPUT);
-  pinMode(output27, OUTPUT);
-  digitalWrite(output26, LOW);
-  digitalWrite(output27, LOW);
+  pinMode(pins[0].pin_number, OUTPUT);
+  pinMode(pins[1].pin_number, OUTPUT);
+  digitalWrite(pins[0].pin_number, HIGH);
+  digitalWrite(pins[1].pin_number, HIGH);
   //============/ pin set up ==============
 
 
